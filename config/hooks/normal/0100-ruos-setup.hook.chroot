@@ -1,0 +1,74 @@
+#!/bin/sh
+set -eu
+
+echo "==> ruOS: Configuring for MacBook Air 2012..."
+
+# Spotify repo
+curl -sS https://download.spotify.com/debian/pubkey_C85668DF69375001.gpg | gpg --dearmor -o /usr/share/keyrings/spotify-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/spotify-archive-keyring.gpg] http://repository.spotify.com stable non-free" > /etc/apt/sources.list.d/spotify.list
+apt-get update -qq
+apt-get install -y spotify-client
+
+# Node.js (for Claude Code)
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt-get install -y nodejs
+
+# Rustup will be installed per-user on first login via skel script
+
+# Fan control for MacBook Air
+cat > /etc/modprobe.d/applesmc.conf << 'FANEOF'
+# Enable fan control for MacBook Air
+options applesmc force=1
+FANEOF
+
+# Keyboard/trackpad tweaks
+cat > /etc/modprobe.d/hid-apple.conf << 'KBEOF'
+# Fn keys default to function keys, not media
+options hid_apple fnmode=2
+# Swap Option and Command for Linux layout
+options hid_apple swap_opt_cmd=1
+KBEOF
+
+# Power management for old MacBook
+cat > /etc/tlp.d/01-macbook.conf << 'TLPEOF'
+CPU_SCALING_GOVERNOR_ON_AC=performance
+CPU_SCALING_GOVERNOR_ON_BAT=powersave
+CPU_BOOST_ON_AC=1
+CPU_BOOST_ON_BAT=0
+WIFI_PWR_ON_AC=off
+WIFI_PWR_ON_BAT=on
+TLPEOF
+
+# LightDM auto-login
+mkdir -p /etc/lightdm/lightdm.conf.d
+cat > /etc/lightdm/lightdm.conf.d/50-ruos-autologin.conf << 'DMEOF'
+[Seat:*]
+autologin-user=ruv
+autologin-user-timeout=0
+DMEOF
+
+# Create ruv user
+useradd -m -s /bin/bash -G sudo,audio,video,plugdev,bluetooth ruv || true
+echo "ruv:ruv" | chpasswd
+
+# sudoers — passwordless for ruv
+echo "ruv ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ruv
+chmod 440 /etc/sudoers.d/ruv
+
+# MIDI/audio permissions for DDJ-200
+cat > /etc/udev/rules.d/99-dj-controller.rules << 'UDEVEOF'
+# Pioneer DDJ-200 USB MIDI
+SUBSYSTEM=="usb", ATTR{idVendor}=="2b73", MODE="0666", GROUP="audio"
+# Generic USB MIDI controllers
+SUBSYSTEM=="snd", KERNEL=="midi*", MODE="0666", GROUP="audio"
+SUBSYSTEM=="snd", KERNEL=="controlC*", MODE="0666", GROUP="audio"
+UDEVEOF
+
+# Low-latency audio for DJ use
+cat > /etc/security/limits.d/audio.conf << 'LIMEOF'
+@audio - rtprio 99
+@audio - memlock unlimited
+@audio - nice -19
+LIMEOF
+
+echo "==> ruOS: MacBook Air 2012 configuration complete."

@@ -1,0 +1,58 @@
+# ruOS Desktop — lightweight for 2012 MacBook Air (4-8GB RAM)
+# Window manager: XFCE (light, snappy on old hardware)
+xfce4
+xfce4-terminal
+xfce4-taskmanager
+xfce4-power-manager
+xfce4-pulseaudio-plugin
+thunar
+lightdm
+lightdm-gtk-greeter
+
+# Core system
+linux-firmware
+network-manager
+network-manager-gnome
+bluez
+blueman
+pulseaudio
+pavucontrol
+pipewire
+pipewire-pulse
+wireplumber
+
+# MacBook Air 2012 hardware
+broadcom-sta-dkms
+bcmwl-kernel-source
+intel-microcode
+xserver-xorg-video-intel
+thermald
+tlp
+tlp-rdw
+
+# Basic apps
+firefox
+file-roller
+evince
+eog
+
+# Build essentials (for Rust binaries, Claude Code)
+build-essential
+curl
+git
+ca-certificates
+dkms
+
+# Multimedia / DJ
+alsa-utils
+libasound2-dev
+libusb-1.0-0
+mixxx
+
+# System
+sudo
+openssh-client
+htop
+neofetch
+usbutils
+pciutils

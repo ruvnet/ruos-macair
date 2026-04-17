@@ -1,0 +1,20 @@
+# live-build artifacts
+.build/
+chroot/
+binary/
+cache/
+*.iso
+*.img
+
+# Docker
+*.tar
+
+# Binary blobs (too large for git)
+config/includes.chroot/usr/local/bin/
+
+# OS
+.DS_Store
+*.swp
+config/includes.chroot/etc/skel/.mcp.json
+config/includes.chroot/etc/skel/CLAUDE.md
+.claude-flow/
