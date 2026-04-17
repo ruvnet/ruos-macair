@@ -50,15 +50,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Touchpad
     xserver-xorg-input-libinput \
     xserver-xorg-input-synaptics \
-    # Basic apps
-    firefox \
     # Build essentials
     build-essential \
+    software-properties-common \
     curl \
     wget \
     git \
     ca-certificates \
     gnupg \
+    rsync \
     # DJ / MIDI
     libusb-1.0-0 \
     mixxx \
@@ -69,9 +69,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     neofetch \
     usbutils \
     pciutils \
+    parted \
     dbus \
     systemd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Firefox — real .deb from Mozilla PPA (not snap)
+RUN apt-get update && apt-get remove -y firefox 2>/dev/null; \
+    add-apt-repository -y ppa:mozillateam/ppa && \
+    printf 'Package: *\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001\n' > /etc/apt/preferences.d/mozilla-firefox && \
+    apt-get update && apt-get install -y firefox && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Node 22 for Claude Code
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
@@ -84,7 +92,7 @@ RUN curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /us
     apt-get update && apt-get install -y tailscale && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Spotify — install via snap on real system; for Docker just use the .deb approach with trusted repo
+# Spotify
 RUN curl -sS https://download.spotify.com/debian/pubkey_C85668DF69375001.gpg | gpg --dearmor -o /usr/share/keyrings/spotify-archive-keyring.gpg && \
     curl -sS https://download.spotify.com/debian/pubkey_6224F9941A8AA6D1.gpg | gpg --dearmor --yes >> /usr/share/keyrings/spotify-archive-keyring.gpg && \
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/spotify-archive-keyring.gpg allow-insecure=yes] http://repository.spotify.com stable non-free" > /etc/apt/sources.list.d/spotify.list && \
@@ -93,6 +101,10 @@ RUN curl -sS https://download.spotify.com/debian/pubkey_C85668DF69375001.gpg | g
 
 # ruOS binaries
 COPY config/includes.chroot/usr/local/bin/ /usr/local/bin/
+
+# Install-to-disk script
+COPY scripts/ruos-install-to-disk /usr/local/bin/ruos-install-to-disk
+RUN chmod +x /usr/local/bin/ruos-install-to-disk
 
 # Intel HD 4000 GPU optimization — prefer hardware acceleration
 RUN mkdir -p /etc/X11/xorg.conf.d && \
@@ -119,19 +131,37 @@ RUN useradd -m -s /bin/bash -G sudo,audio,video,plugdev,bluetooth ruv && \
     echo "ruv ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ruv && \
     chmod 440 /etc/sudoers.d/ruv
 
-# Copy skel files for ruv
+# Copy user config files
 COPY config/includes.chroot/etc/skel/.bashrc /home/ruv/.bashrc
 COPY config/includes.chroot/etc/skel/.ruos-first-login.sh /home/ruv/.ruos-first-login.sh
 COPY config/includes.chroot/etc/skel/brain-data/ /home/ruv/brain-data/
-RUN chown -R ruv:ruv /home/ruv
+
+# Desktop shortcuts
+RUN mkdir -p /home/ruv/Desktop && \
+    cp /usr/share/applications/firefox.desktop /home/ruv/Desktop/ && \
+    cp /usr/share/applications/org.mixxx.Mixxx.desktop /home/ruv/Desktop/ && \
+    cp /usr/share/applications/spotify.desktop /home/ruv/Desktop/ && \
+    cp /usr/share/applications/xfce4-terminal.desktop /home/ruv/Desktop/ && \
+    cp /usr/share/applications/thunar.desktop /home/ruv/Desktop/ && \
+    printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=Install ruOS to Disk\nComment=Install ruOS to the internal SSD\nExec=xfce4-terminal -e "sudo ruos-install-to-disk"\nIcon=system-software-install\nTerminal=false\nCategories=System;\n' > /home/ruv/Desktop/ruos-install.desktop && \
+    chmod +x /home/ruv/Desktop/*.desktop && \
+    chown -R ruv:ruv /home/ruv
+
+# Pre-configure Mixxx for DDJ-200
+RUN mkdir -p /home/ruv/.mixxx && \
+    printf '[Controls]\nAutoDjTransition=4\nRateDir=1\n\n[Library]\nRescanOnStartup=0\n\n[Soundcard]\nLatency=5\nSampleRate=44100\n\n[Controller1]\nEnabled=true\nScript=Pioneer-DDJ-200-scripts.js\nMapping=Pioneer DDJ-200.midi.xml\n' > /home/ruv/.mixxx/mixxx.cfg && \
+    chown -R ruv:ruv /home/ruv/.mixxx
 
 # Verify key components
-RUN echo "=== ruOS MacAir Build Verification ===" && \
+RUN echo "=== ruOS MacAir v0.2.0 Build Verification ===" && \
+    echo "Firefox: $(firefox --version 2>/dev/null)" && \
     echo "Node: $(node --version)" && \
-    echo "GPU driver: $(dpkg -l | grep xserver-xorg-video-intel | awk '{print $3}')" && \
-    echo "Mixxx: $(dpkg -l | grep mixxx | awk '{print $3}')" && \
-    echo "Tailscale: $(tailscale version 2>/dev/null || echo 'installed')" && \
+    echo "Spotify: $(dpkg -s spotify-client 2>/dev/null | grep Version)" && \
+    echo "Mixxx: $(dpkg -s mixxx 2>/dev/null | grep Version)" && \
+    echo "Tailscale: $(tailscale version 2>/dev/null | head -1)" && \
+    echo "GPU: $(dpkg -s xserver-xorg-video-intel 2>/dev/null | grep Version)" && \
     echo "ruOS bins:" && ls -1 /usr/local/bin/ruvultra-* /usr/local/bin/mcp-brain* 2>/dev/null && \
+    echo "Desktop:" && ls -1 /home/ruv/Desktop/ && \
     echo "=== Verification complete ==="
 
 USER ruv

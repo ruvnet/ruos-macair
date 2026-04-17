@@ -1,0 +1,149 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "╔══════════════════════════════════════════════╗"
+echo "║  ruOS — Install to Internal Disk             ║"
+echo "╚══════════════════════════════════════════════╝"
+echo
+
+# Detect internal disk (MacBook Air 2012 uses SATA SSD)
+INTERNAL=""
+BOOT_DISK=$(mount | grep "on / " | awk '{print $1}' | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
+
+for disk in /dev/sda /dev/sdb /dev/nvme0n1; do
+    if [ -b "$disk" ] && [ "$disk" != "$BOOT_DISK" ]; then
+        SIZE=$(lsblk -b -d -n -o SIZE "$disk" 2>/dev/null || echo 0)
+        if [ "$SIZE" -gt 50000000000 ]; then
+            INTERNAL="$disk"
+            break
+        fi
+    fi
+done
+
+if [ -z "$INTERNAL" ]; then
+    echo "ERROR: Could not detect internal disk."
+    echo "Available disks:"
+    lsblk -d -o NAME,SIZE,MODEL
+    echo
+    read -p "Enter disk to install to (e.g., /dev/sda): " INTERNAL
+fi
+
+DISK_SIZE=$(lsblk -b -d -n -o SIZE "$INTERNAL" 2>/dev/null)
+DISK_MODEL=$(lsblk -d -n -o MODEL "$INTERNAL" 2>/dev/null)
+echo "Internal disk: $INTERNAL ($DISK_MODEL, $(numfmt --to=iec $DISK_SIZE))"
+echo
+echo "WARNING: This will ERASE ALL DATA on $INTERNAL"
+echo "The MacBook Air's macOS will be replaced with ruOS."
+echo
+read -p "Type YES to continue: " CONFIRM
+if [ "$CONFIRM" != "YES" ]; then
+    echo "Aborted."
+    exit 1
+fi
+
+echo
+echo "==> Step 1/5: Partitioning $INTERNAL (GPT + EFI + root)..."
+parted "$INTERNAL" --script -- \
+    mklabel gpt \
+    mkpart ESP fat32 1MiB 513MiB \
+    set 1 esp on \
+    mkpart root ext4 513MiB 100%
+partprobe "$INTERNAL"
+sleep 2
+
+# Figure out partition naming
+if [[ "$INTERNAL" == *nvme* ]]; then
+    EFI_PART="${INTERNAL}p1"
+    ROOT_PART="${INTERNAL}p2"
+else
+    EFI_PART="${INTERNAL}1"
+    ROOT_PART="${INTERNAL}2"
+fi
+
+echo "==> Step 2/5: Formatting partitions..."
+mkfs.vfat -F 32 -n RUOS-EFI "$EFI_PART"
+mkfs.ext4 -L ruOS-root "$ROOT_PART"
+
+echo "==> Step 3/5: Copying ruOS to internal disk..."
+mkdir -p /mnt/ruos-target /mnt/ruos-efi-target
+mount "$ROOT_PART" /mnt/ruos-target
+mount "$EFI_PART" /mnt/ruos-efi-target
+
+rsync -aAXx --info=progress2 \
+    --exclude='/mnt/*' \
+    --exclude='/proc/*' \
+    --exclude='/sys/*' \
+    --exclude='/dev/*' \
+    --exclude='/run/*' \
+    --exclude='/tmp/*' \
+    / /mnt/ruos-target/
+
+# Ensure required dirs exist
+mkdir -p /mnt/ruos-target/{proc,sys,dev,run,tmp,mnt,boot/efi}
+
+echo "==> Step 4/5: Installing bootloader..."
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
+
+# Write fstab
+cat > /mnt/ruos-target/etc/fstab << FSTABEOF
+UUID=$ROOT_UUID /         ext4  errors=remount-ro 0 1
+UUID=$EFI_UUID  /boot/efi vfat  umask=0077        0 1
+FSTABEOF
+
+# Mount for chroot
+mount --bind /dev /mnt/ruos-target/dev
+mount --bind /dev/pts /mnt/ruos-target/dev/pts
+mount -t proc proc /mnt/ruos-target/proc
+mount -t sysfs sysfs /mnt/ruos-target/sys
+mount --bind /mnt/ruos-efi-target /mnt/ruos-target/boot/efi
+
+chroot /mnt/ruos-target /bin/bash -c "
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram 2>&1
+    update-grub 2>&1
+"
+
+echo "==> Step 5/5: Building standalone GRUB EFI..."
+cat > /tmp/grub-embed.cfg << GRUBEOF
+insmod part_gpt
+insmod ext2
+insmod search_fs_uuid
+insmod linux
+insmod all_video
+insmod gzio
+insmod normal
+search --no-floppy --fs-uuid --set=root $ROOT_UUID
+set prefix=(\\\$root)/boot/grub
+configfile \\\$prefix/grub.cfg
+menuentry "ruOS (fallback)" {
+    search --no-floppy --fs-uuid --set=root $ROOT_UUID
+    linux /boot/vmlinuz root=UUID=$ROOT_UUID ro quiet splash
+    initrd /boot/initrd.img
+}
+GRUBEOF
+
+if command -v grub-mkstandalone &>/dev/null; then
+    grub-mkstandalone --format=x86_64-efi \
+        --output=/mnt/ruos-efi-target/EFI/BOOT/BOOTX64.EFI \
+        --locales="" --fonts="" \
+        --modules="part_gpt fat ext2 normal linux search search_fs_uuid boot configfile gzio all_video efi_gop efi_uga" \
+        "boot/grub/grub.cfg=/tmp/grub-embed.cfg"
+fi
+
+# Cleanup
+umount /mnt/ruos-target/boot/efi
+umount /mnt/ruos-target/dev/pts
+umount /mnt/ruos-target/dev
+umount /mnt/ruos-target/proc
+umount /mnt/ruos-target/sys
+umount /mnt/ruos-target
+umount /mnt/ruos-efi-target
+sync
+
+echo
+echo "╔══════════════════════════════════════════════╗"
+echo "║  ruOS installed to internal disk!            ║"
+echo "║                                              ║"
+echo "║  Remove the USB drive and reboot.            ║"
+echo "║  ruOS will boot directly from the SSD.       ║"
+echo "╚══════════════════════════════════════════════╝"
